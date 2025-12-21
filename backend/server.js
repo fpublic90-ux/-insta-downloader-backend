@@ -14,6 +14,9 @@ app.use(cors()); // CORS support
 app.use(express.json()); // Parse JSON bodies
 app.use(morgan('combined')); // Logging
 
+// Fix for Render/Heroku proxied environments
+app.set('trust proxy', 1);
+
 // Rate Limiting
 const limiter = rateLimit({
     windowMs: 15 * 60 * 1000, // 15 minutes

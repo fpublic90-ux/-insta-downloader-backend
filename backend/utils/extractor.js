@@ -1,9 +1,6 @@
 const axios = require('axios');
 const { getRandomUserAgent } = require('./userAgents');
 
-/**
- * Clean URL to remove query parameters
- */
 const cleanUrl = (url) => {
     try {
         const urlObj = new URL(url);
@@ -13,193 +10,122 @@ const cleanUrl = (url) => {
     }
 };
 
-/**
- * Strategy 1: JSON Endpoint (?__a=1&__d=dis)
- */
+const getHeaders = () => ({
+    'User-Agent': getRandomUserAgent(),
+    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
+    'Accept-Language': 'en-US,en;q=0.9',
+    'Upgrade-Insecure-Requests': '1',
+    'Sec-Fetch-Site': 'none',
+    'Sec-Fetch-Mode': 'navigate',
+    'Sec-Fetch-User': '?1',
+    'Sec-Fetch-Dest': 'document',
+    'dnt': '1',
+});
+
+// JSON Strategy
 const tryJsonExtraction = async (targetUrl) => {
     try {
         const jsonUrl = `${targetUrl}?__a=1&__d=dis`;
         console.log(`[Strategy JSON] Fetching ${jsonUrl}...`);
-
-        const response = await axios.get(jsonUrl, {
-            headers: {
-                'User-Agent': getRandomUserAgent(),
-                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-                'Accept-Language': 'en-US,en;q=0.5',
-            },
-            timeout: 8000 // Short timeout to fail fast
-        });
-
+        const response = await axios.get(jsonUrl, { headers: getHeaders(), timeout: 8000 });
         const data = response.data;
 
-        if (typeof data === 'string' && (data.includes('<!DOCTYPE html>') || data.includes('Login'))) {
-            throw new Error('Received HTML instead of JSON');
-        }
+        if (typeof data === 'string') throw new Error('Not JSON');
 
-        let media = null;
-        if (data.graphql && data.graphql.shortcode_media) {
-            media = data.graphql.shortcode_media;
-        } else if (data.items && data.items.length > 0) {
-            media = data.items[0];
-        }
+        const media = data.graphql?.shortcode_media || data.items?.[0];
+        if (!media) throw new Error('No media found');
+        if (!media.is_video) throw new Error('Not a video');
 
-        if (!media) throw new Error('No media data found in JSON');
-        if (!media.is_video) throw new Error('Target is not a video');
-
-        let videoUrl = media.video_url;
-
-        // Try to find best quality
-        if (media.video_versions && media.video_versions.length > 0) {
-            const best = media.video_versions.sort((a, b) => (b.width * b.height) - (a.width * a.height))[0];
-            videoUrl = best.url;
-        }
-
-        if (videoUrl) {
-            return {
-                status: 'success',
-                type: 'json_api',
-                quality: 'high',
-                videoUrl: videoUrl,
-                filename: `insta_${media.id || Date.now()}.mp4`
-            };
-        }
-        throw new Error('No video_url in JSON');
-
+        return {
+            status: 'success',
+            type: 'json',
+            videoUrl: media.video_url
+        };
     } catch (e) {
         console.log(`[Strategy JSON] Failed: ${e.message}`);
         return null;
     }
 };
 
-/**
- * Strategy 2: Embed Page Scraping (/embed/captioned)
- * Often easier to scrape than the main page
- */
+// Embed Strategy
 const tryEmbedExtraction = async (targetUrl) => {
     try {
-        // Ensure trailing slash for embed url construction
         const baseUrl = targetUrl.endsWith('/') ? targetUrl : targetUrl + '/';
         const embedUrl = `${baseUrl}embed/captioned/`;
         console.log(`[Strategy Embed] Fetching ${embedUrl}...`);
 
-        const response = await axios.get(embedUrl, {
-            headers: {
-                'User-Agent': getRandomUserAgent(),
-                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-                'Referer': 'https://www.instagram.com/',
-            },
-            timeout: 10000
-        });
-
+        const response = await axios.get(embedUrl, { headers: getHeaders(), timeout: 10000 });
         const html = response.data;
 
-        // Pattern 1: Look for .mp4 inside the HTML directly
-        // The embed page usually has a video tag or a JSON blob
-
-        // Check for specific video_url pattern in embed JSON
         const videoUrlMatch = html.match(/"video_url"\s*:\s*"([^"]+)"/);
-        if (videoUrlMatch && videoUrlMatch[1]) {
-            let vUrl = videoUrlMatch[1].replace(/\\u0026/g, '&').replace(/\\/g, '');
+        if (videoUrlMatch?.[1]) {
             return {
                 status: 'success',
                 type: 'embed_json',
-                videoUrl: vUrl
+                videoUrl: videoUrlMatch[1].replace(/\\u0026/g, '&').replace(/\\/g, '')
             };
         }
-
-        // Pattern 2: scan for any .mp4 url (fallback)
-        // Be careful not to match poster images
-        const mp4Match = html.match(/https?:\/\/[^"']+\.mp4[^"']*/);
-        if (mp4Match && mp4Match[0]) {
-            let vUrl = mp4Match[0].replace(/\\u0026/g, '&').replace(/\\/g, '');
-            return {
-                status: 'success',
-                type: 'embed_regex',
-                videoUrl: vUrl
-            };
-        }
-
-        throw new Error('No video found in Embed HTML');
-
+        return null;
     } catch (e) {
         console.log(`[Strategy Embed] Failed: ${e.message}`);
         return null;
     }
 };
 
-/**
- * Strategy 3: Main Page HTML Scraping (Fallback)
- */
+// HTML Strategy
 const tryHtmlExtraction = async (targetUrl) => {
     try {
         console.log(`[Strategy HTML] Fetching ${targetUrl}...`);
-        const response = await axios.get(targetUrl, {
-            headers: {
-                'User-Agent': getRandomUserAgent(),
-                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-                'Accept-Language': 'en-US,en;q=0.5',
-            },
-            timeout: 15000
-        });
-
+        const response = await axios.get(targetUrl, { headers: getHeaders(), timeout: 15000 });
         const html = response.data;
 
-        // 1. Check Meta Tags (og:video)
+        // OG Video
         const ogVideo = html.match(/<meta property="og:video" content="([^"]+)"/);
-        if (ogVideo && ogVideo[1]) {
-            return {
-                status: 'success',
-                type: 'html_og',
-                videoUrl: ogVideo[1].replace(/&amp;/g, '&')
-            };
+        if (ogVideo?.[1]) return { status: 'success', type: 'html_og', videoUrl: ogVideo[1].replace(/&amp;/g, '&') };
+
+        // Twitter Stream
+        const twitterStream = html.match(/<meta name="twitter:player:stream" content="([^"]+)"/);
+        if (twitterStream?.[1]) return { status: 'success', type: 'html_twitter', videoUrl: twitterStream[1].replace(/&amp;/g, '&') };
+
+        // Global Regex Search (Last Resort)
+        // Look for any string that looks like an mp4 url inside quotes
+        // This is risky but effective as a catch-all
+        const globalMatch = html.match(/"(https:[^"]+\.mp4[^"]*)"/);
+        if (globalMatch?.[1]) {
+            // Validate it's an instagram CDN url to avoid ads/tracking pixels
+            if (globalMatch[1].includes('cdninstagram') || globalMatch[1].includes('fbcdn')) {
+                return {
+                    status: 'success',
+                    type: 'html_global_regex',
+                    videoUrl: globalMatch[1].replace(/\\u0026/g, '&').replace(/\\/g, '')
+                };
+            }
         }
 
-        // 2. Shared Data Regex
-        const videoUrlMatch = html.match(/"video_url":"([^"]+)"/);
-        if (videoUrlMatch && videoUrlMatch[1]) {
-            let vUrl = videoUrlMatch[1].replace(/\\u0026/g, '&');
-            return {
-                status: 'success',
-                type: 'html_regex',
-                videoUrl: vUrl
-            };
-        }
-
-        // Log snippet for debugging
-        const snippet = html.substring(0, 300).replace(/\n/g, ' ');
-        console.log(`[Strategy HTML] Failed. Snippet: ${snippet}`);
-
+        console.log(`[Strategy HTML] Failed. HTML length: ${html.length}`);
         throw new Error('No video found in HTML');
-
     } catch (e) {
         console.log(`[Strategy HTML] Failed: ${e.message}`);
         throw e;
     }
 };
 
-/**
- * Main extraction function
- */
 const extractVideoInfo = async (instagramUrl) => {
     try {
         const targetUrl = cleanUrl(instagramUrl);
 
-        // 1. Try JSON
-        const jsonResult = await tryJsonExtraction(targetUrl);
-        if (jsonResult) return jsonResult;
+        // Parallel execution for speed? No, sequential is safer for IPs.
+        let result = await tryJsonExtraction(targetUrl);
+        if (result) return result;
 
-        // 2. Try Embed Page (NEW)
-        const embedResult = await tryEmbedExtraction(targetUrl);
-        if (embedResult) return embedResult;
+        result = await tryEmbedExtraction(targetUrl);
+        if (result) return result;
 
-        // 3. Try Main HTML Fallback
-        const htmlResult = await tryHtmlExtraction(targetUrl);
-        if (htmlResult) return htmlResult;
+        result = await tryHtmlExtraction(targetUrl);
+        if (result) return result;
 
-        throw new Error('All extraction strategies failed.');
-
+        throw new Error('All strategies failed');
     } catch (error) {
-        console.error('Final Extraction Error:', error.message);
         throw new Error(error.message || 'Failed to extract video');
     }
 };
