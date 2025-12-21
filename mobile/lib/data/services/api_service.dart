@@ -10,8 +10,8 @@ class ApiService {
         ApiConstants.extractEndpoint,
         data: {'url': url},
         options: Options(
-          sendTimeout: const Duration(seconds: 15),
-          receiveTimeout: const Duration(seconds: 15),
+          sendTimeout: const Duration(seconds: 60),
+          receiveTimeout: const Duration(seconds: 60),
         ),
       );
 
