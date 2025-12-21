@@ -103,16 +103,72 @@ const tryHtmlExtraction = async (targetUrl) => {
         }
 
         console.log(`[Strategy HTML] Failed. HTML length: ${html.length}`);
-        throw new Error('No video found in HTML');
+        throw new Error('the srver is busy try again');
     } catch (e) {
         console.log(`[Strategy HTML] Failed: ${e.message}`);
         throw e;
     }
 };
 
+const tryFacebookExtraction = async (targetUrl) => {
+    try {
+        console.log(`[Strategy FB] Fetching ${targetUrl}...`);
+
+        // Basic scraping for HD/SD sources
+        // We need a widely compatible User-Agent for standard FB pages
+        const headers = getHeaders();
+
+        const response = await axios.get(targetUrl, { headers: headers, timeout: 15000 });
+        const html = response.data;
+
+        // 1. Check for hd_src (Video quality: HD)
+        const hdMatch = html.match(/"hd_src":"([^"]+)"/);
+        if (hdMatch?.[1]) {
+            return {
+                status: 'success',
+                type: 'fb_hd',
+                videoUrl: hdMatch[1].replace(/\\u0025/g, '%').replace(/\\/g, '')
+            };
+        }
+
+        // 2. Check for sd_src (Video quality: SD)
+        const sdMatch = html.match(/"sd_src":"([^"]+)"/);
+        if (sdMatch?.[1]) {
+            return {
+                status: 'success',
+                type: 'fb_sd',
+                videoUrl: sdMatch[1].replace(/\\u0025/g, '%').replace(/\\/g, '')
+            };
+        }
+
+        // 3. Check for og:video (Open Graph) - often works for public posts
+        const ogVideo = html.match(/<meta property="og:video" content="([^"]+)"/);
+        if (ogVideo?.[1]) {
+            return {
+                status: 'success',
+                type: 'fb_og',
+                videoUrl: ogVideo[1].replace(/&amp;/g, '&')
+            };
+        }
+
+        console.log(`[Strategy FB] Failed to find video source in HTML.`);
+        return null;
+    } catch (e) {
+        console.log(`[Strategy FB] Failed: ${e.message}`);
+        return null;
+    }
+};
+
 const extractVideoInfo = async (instagramUrl) => {
     try {
         const targetUrl = cleanUrl(instagramUrl);
+
+        // ROUTING: Facebook vs Instagram
+        if (targetUrl.includes('facebook.com') || targetUrl.includes('fb.watch')) {
+            const result = await tryFacebookExtraction(targetUrl);
+            if (result) return result;
+            throw new Error('Could not extract Facebook video. Make sure it is public.');
+        }
 
         // Parallel execution for speed? No, sequential is safer for IPs.
         let result = await tryJsonExtraction(targetUrl);

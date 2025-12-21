@@ -39,8 +39,10 @@ app.post('/extract', async (req, res) => {
         }
 
         // Basic validation
-        if (!url.includes('instagram.com/reel') && !url.includes('instagram.com/p/')) {
-            return res.status(400).json({ status: 'error', message: 'Invalid Instagram URL' });
+        if (!url.includes('instagram.com') &&
+            !url.includes('facebook.com') &&
+            !url.includes('fb.watch')) {
+            return res.status(400).json({ status: 'error', message: 'Invalid URL. Only Instagram & Facebook links supported.' });
         }
 
         const result = await extractVideoInfo(url);
