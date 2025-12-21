@@ -66,43 +66,69 @@ const extractVideoInfo = async (instagramUrl) => {
         // Note: Instagram changes this frequently. This is a best-effort robust approach.
         // We grep for "video_versions" specifically if full JSON parse fails or as a fallback.
 
-        let videoVersions = [];
-        let width = 0;
-        let height = 0;
+        let videoUrl = null;
 
-        // Strategy A: Regex for video_versions directly (Most robust for public extraction)
-        // Look for: "video_versions":[{"type":101,"width":...}]
+        // Strategy A: Regex for "video_versions" (Most robust for standard posts)
         const videoVersionsMatch = html.match(/"video_versions":\s*(\[.*?\])/);
-
         if (videoVersionsMatch && videoVersionsMatch[1]) {
             try {
-                videoVersions = JSON.parse(videoVersionsMatch[1]);
+                const videoVersions = JSON.parse(videoVersionsMatch[1]);
+                // Sort by resolution
+                videoVersions.sort((a, b) => (b.width * b.height) - (a.width * a.height));
+                if (videoVersions.length > 0) {
+                    return {
+                        status: 'success',
+                        quality: 'original',
+                        resolution: `${videoVersions[0].width}x${videoVersions[0].height}`,
+                        videoUrl: videoVersions[0].url
+                    };
+                }
             } catch (e) {
-                console.error('Failed to parse video_versions regex match');
+                console.error('Failed to parse video_versions');
             }
         }
 
-        if (!videoVersions || videoVersions.length === 0) {
-            // Strategy B: Legacy shared data
-            const jsonData = extractSharedData(html);
-            // Traverse typically: entry_data.PostPage[0].graphql.shortcode_media.video_versions
-            // Or structured data
-            // This part is highly variable, so Regex A is preferred.
+        // Strategy B: og:video Meta Tag (Fallback)
+        const ogVideo = html.match(/<meta property="og:video" content="([^"]+)"/);
+        if (ogVideo && ogVideo[1]) {
+            return {
+                status: 'success',
+                quality: 'standard',
+                resolution: 'unknown',
+                videoUrl: ogVideo[1].replace(/&amp;/g, '&')
+            };
         }
 
-        if (!videoVersions || videoVersions.length === 0) {
-            // Strategy C: Graphql meta tag
-            const metaVideo = html.match(/<meta property="og:video" content="([^"]+)"/);
-            if (metaVideo && metaVideo[1]) {
-                return {
-                    status: 'success',
-                    quality: 'standard', // Cannot determine without list
-                    resolution: 'unknown',
-                    videoUrl: metaVideo[1].replace(/&amp;/g, '&')
-                };
-            }
-            throw new Error('No video found. Post might be private or not a video.');
+        // Strategy C: og:video:secure_url (Another fallback)
+        const ogVideoSecure = html.match(/<meta property="og:video:secure_url" content="([^"]+)"/);
+        if (ogVideoSecure && ogVideoSecure[1]) {
+            return {
+                status: 'success',
+                quality: 'standard',
+                resolution: 'unknown',
+                videoUrl: ogVideoSecure[1].replace(/&amp;/g, '&')
+            };
         }
+
+        // Strategy D: twitter:player:stream
+        const twitterStream = html.match(/<meta name="twitter:player:stream" content="([^"]+)"/);
+        if (twitterStream && twitterStream[1]) {
+            return {
+                status: 'success',
+                quality: 'standard',
+                resolution: 'unknown',
+                videoUrl: twitterStream[1].replace(/&amp;/g, '&')
+            };
+        }
+
+        // Logging for failure analysis
+        if (html.includes('Login • Instagram')) {
+            console.error('Error: Redirected to Login Page');
+            throw new Error('Server blocked (Login Page). Try again later.');
+        }
+
+        console.log('Failed HTML Dump (first 500 chars):', html.substring(0, 500));
+        throw new Error('No video found. Post might be private or not a video.');
 
         // 3. Sort by quality (Resolution > Bandwidth)
         // Highest resolution (width * height)

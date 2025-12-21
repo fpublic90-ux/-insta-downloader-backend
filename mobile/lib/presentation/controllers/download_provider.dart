@@ -1,5 +1,6 @@
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
+import 'package:open_file/open_file.dart';
 import '../../data/models/download_item.dart';
 import '../../data/services/api_service.dart';
 import '../../data/services/download_service.dart';
@@ -28,8 +29,10 @@ class DownloadProvider with ChangeNotifier {
   }
 
   Future<void> processUrl(String url) async {
+    print('DownloadProvider: Processing URL: $url');
     // Check if valid URL
     if (url.isEmpty || !url.contains('instagram.com')) {
+      print('DownloadProvider: Invalid URL');
       throw Exception('Invalid Instagram URL');
     }
 
@@ -38,7 +41,9 @@ class DownloadProvider with ChangeNotifier {
 
     try {
       // 1. Extract Info
+      print('DownloadProvider: Extracting video info...');
       final data = await _apiService.extractVideo(url);
+      print('DownloadProvider: Extraction success: $data');
       final videoUrl = data['videoUrl'];
       final resolution = data['resolution'] ?? 'HD';
 
@@ -61,6 +66,7 @@ class DownloadProvider with ChangeNotifier {
       // 3. Start Download
       await _startDownload(newItem);
     } catch (e) {
+      print('DownloadProvider: Error in processUrl: $e');
       _isLoading = false;
       notifyListeners();
       rethrow;
@@ -68,11 +74,12 @@ class DownloadProvider with ChangeNotifier {
   }
 
   Future<void> _startDownload(DownloadItem item) async {
+    print('DownloadProvider: Starting download for ${item.fileName}');
     try {
       final index = _downloads.indexWhere((element) => element.id == item.id);
       if (index == -1) return;
 
-      await _downloadService.downloadVideo(
+      final result = await _downloadService.downloadVideo(
         item.videoUrl!,
         item.fileName,
         onProgress: (progress) {
@@ -85,17 +92,23 @@ class DownloadProvider with ChangeNotifier {
         },
       );
 
+      print(
+          'DownloadProvider: Download finished. Path: ${result['path']}, Size: ${result['size']}');
+
       // Complete
       final idx = _downloads.indexWhere((element) => element.id == item.id);
       if (idx != -1) {
         _downloads[idx] = _downloads[idx].copyWith(
           status: DownloadStatus.completed,
           progress: 1.0,
+          filePath: result['path'],
+          fileSize: result['size'],
         );
         notifyListeners();
         _saveToHistory();
       }
     } catch (e) {
+      print('DownloadProvider: Download failed for ${item.fileName}: $e');
       final idx = _downloads.indexWhere((element) => element.id == item.id);
       if (idx != -1) {
         _downloads[idx] =
@@ -108,6 +121,7 @@ class DownloadProvider with ChangeNotifier {
   }
 
   void retryDownload(DownloadItem item) async {
+    print('DownloadProvider: Retrying download ${item.id}');
     final idx = _downloads.indexWhere((element) => element.id == item.id);
     if (idx != -1 && item.videoUrl != null) {
       _downloads[idx] = _downloads[idx]
@@ -115,15 +129,32 @@ class DownloadProvider with ChangeNotifier {
       notifyListeners();
       _startDownload(_downloads[idx]);
     } else {
-      // Re-process if videoUrl expired (not implemented simple retry here assume link is fresh for now)
-      // Or remove and re-add
+      print(
+          'DownloadProvider: Cannot retry, missing videoUrl or item not found');
     }
   }
 
   void clearHistory() {
+    print('DownloadProvider: Clearing history');
     _downloads.clear();
     _historyStorage.clearHistory();
     notifyListeners();
+  }
+
+  Future<void> openVideo(DownloadItem item) async {
+    print('DownloadProvider: Request to open video: ${item.filePath}');
+    if (item.filePath == null) {
+      print('DownloadProvider: File path is null');
+      return;
+    }
+
+    try {
+      final result = await OpenFile.open(item.filePath);
+      print(
+          'DownloadProvider: Open result: ${result.type} - ${result.message}');
+    } catch (e) {
+      print('DownloadProvider: Error opening file: $e');
+    }
   }
 
   Future<void> _saveToHistory() async {

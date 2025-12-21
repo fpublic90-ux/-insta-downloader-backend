@@ -21,7 +21,8 @@ dependencies:
   uuid: any
   fluttertoast: any
   
-  google_fonts: any
+  google_fonts: ^6.1.0
+  open_file: ^3.3.2
   flutter_animate: any
   shimmer: any
 

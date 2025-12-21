@@ -13,6 +13,7 @@ class DownloadItem {
   final DownloadStatus status;
   final DateTime createdAt;
   final String quality;
+  final int? fileSize;
 
   DownloadItem({
     String? id,
@@ -25,6 +26,7 @@ class DownloadItem {
     this.status = DownloadStatus.pending,
     DateTime? createdAt,
     this.quality = 'Unknown',
+    this.fileSize,
   })  : id = id ?? const Uuid().v4(),
         createdAt = createdAt ?? DateTime.now();
 
@@ -35,6 +37,7 @@ class DownloadItem {
     double? progress,
     DownloadStatus? status,
     String? quality,
+    int? fileSize,
   }) {
     return DownloadItem(
       id: id,
@@ -47,6 +50,7 @@ class DownloadItem {
       status: status ?? this.status,
       createdAt: createdAt,
       quality: quality ?? this.quality,
+      fileSize: fileSize ?? this.fileSize,
     );
   }
 
@@ -62,6 +66,7 @@ class DownloadItem {
         'status': status.index,
         'createdAt': createdAt.toIso8601String(),
         'quality': quality,
+        'fileSize': fileSize,
       };
 
   factory DownloadItem.fromJson(Map<String, dynamic> json) => DownloadItem(
@@ -75,5 +80,6 @@ class DownloadItem {
         status: DownloadStatus.values[json['status']],
         createdAt: DateTime.parse(json['createdAt']),
         quality: json['quality'],
+        fileSize: json['fileSize'],
       );
 }
