@@ -79,31 +79,74 @@ const tryHtmlExtraction = async (targetUrl) => {
         const response = await axios.get(targetUrl, { headers: getHeaders(), timeout: 15000 });
         const html = response.data;
 
-        // OG Video
+        console.log(`[Strategy HTML] Received HTML length: ${html.length}`);
+
+        // Pattern 1: OG Video
         const ogVideo = html.match(/<meta property="og:video" content="([^"]+)"/);
-        if (ogVideo?.[1]) return { status: 'success', type: 'html_og', videoUrl: ogVideo[1].replace(/&amp;/g, '&') };
+        if (ogVideo?.[1]) {
+            console.log(`[Strategy HTML] ✓ Found via og:video`);
+            return { status: 'success', type: 'html_og', videoUrl: ogVideo[1].replace(/&amp;/g, '&') };
+        }
 
-        // Twitter Stream
+        // Pattern 2: Twitter Stream
         const twitterStream = html.match(/<meta name="twitter:player:stream" content="([^"]+)"/);
-        if (twitterStream?.[1]) return { status: 'success', type: 'html_twitter', videoUrl: twitterStream[1].replace(/&amp;/g, '&') };
+        if (twitterStream?.[1]) {
+            console.log(`[Strategy HTML] ✓ Found via twitter:player:stream`);
+            return { status: 'success', type: 'html_twitter', videoUrl: twitterStream[1].replace(/&amp;/g, '&') };
+        }
 
-        // Global Regex Search (Last Resort)
-        // Look for any string that looks like an mp4 url inside quotes
-        // This is risky but effective as a catch-all
-        const globalMatch = html.match(/"(https:[^"]+\.mp4[^"]*)"/);
-        if (globalMatch?.[1]) {
-            // Validate it's an instagram CDN url to avoid ads/tracking pixels
-            if (globalMatch[1].includes('cdninstagram') || globalMatch[1].includes('fbcdn')) {
-                return {
-                    status: 'success',
-                    type: 'html_global_regex',
-                    videoUrl: globalMatch[1].replace(/\\u0026/g, '&').replace(/\\/g, '')
-                };
+        // Pattern 3: video_url in JSON (most common for reels)
+        const videoUrlJson = html.match(/"video_url":"([^"]+)"/);
+        if (videoUrlJson?.[1]) {
+            const url = videoUrlJson[1].replace(/\\u0026/g, '&').replace(/\\/g, '');
+            if (url.includes('cdninstagram') || url.includes('fbcdn')) {
+                console.log(`[Strategy HTML] ✓ Found via video_url JSON`);
+                return { status: 'success', type: 'html_video_url_json', videoUrl: url };
             }
         }
 
-        console.log(`[Strategy HTML] Failed. HTML length: ${html.length}`);
-        throw new Error('the srver is busy try again');
+        // Pattern 4: playback_url in JSON
+        const playbackUrl = html.match(/"playback_url":"([^"]+)"/);
+        if (playbackUrl?.[1]) {
+            const url = playbackUrl[1].replace(/\\u0026/g, '&').replace(/\\/g, '');
+            if (url.includes('cdninstagram') || url.includes('fbcdn')) {
+                console.log(`[Strategy HTML] ✓ Found via playback_url JSON`);
+                return { status: 'success', type: 'html_playback_url', videoUrl: url };
+            }
+        }
+
+        // Pattern 5: Global .mp4 search
+        const globalMp4 = html.match(/"(https:[^"]+\.mp4[^"]*)"/);
+        if (globalMp4?.[1]) {
+            const url = globalMp4[1].replace(/\\u0026/g, '&').replace(/\\/g, '');
+            if (url.includes('cdninstagram') || url.includes('fbcdn')) {
+                console.log(`[Strategy HTML] ✓ Found via global .mp4 search`);
+                return { status: 'success', type: 'html_global_mp4', videoUrl: url };
+            }
+        }
+
+        // Pattern 6: Look for any Instagram CDN video URL
+        const cdnVideo = html.match(/"(https:\/\/[^"]*(?:cdninstagram|fbcdn)[^"]*(?:\.mp4|\/video)[^"]*)"/);
+        if (cdnVideo?.[1]) {
+            const url = cdnVideo[1].replace(/\\u0026/g, '&').replace(/\\/g, '');
+            console.log(`[Strategy HTML] ✓ Found via CDN pattern`);
+            return { status: 'success', type: 'html_cdn_pattern', videoUrl: url };
+        }
+
+        // Debug: Show what we're getting
+        console.log(`[Strategy HTML] ✗ No patterns matched`);
+        console.log(`[Strategy HTML] Checking for common indicators...`);
+        console.log(`  - Contains "video_url": ${html.includes('video_url')}`);
+        console.log(`  - Contains "playback_url": ${html.includes('playback_url')}`);
+        console.log(`  - Contains "cdninstagram": ${html.includes('cdninstagram')}`);
+        console.log(`  - Contains "fbcdn": ${html.includes('fbcdn')}`);
+        console.log(`  - Contains ".mp4": ${html.includes('.mp4')}`);
+
+        // Log a snippet to help debug
+        const snippet = html.substring(0, 500).replace(/\n/g, ' ');
+        console.log(`[Strategy HTML] Preview: ${snippet}`);
+
+        throw new Error('Could not extract video. Possible reasons: 1) Post is private or deleted, 2) Invalid URL, 3) Instagram changed their structure, or 4) Content type not supported. Please try a different public post or reel.');
     } catch (e) {
         console.log(`[Strategy HTML] Failed: ${e.message}`);
         throw e;

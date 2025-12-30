@@ -30,6 +30,14 @@ app.get('/', (req, res) => {
     res.json({ status: 'running', message: 'Instagram Public Downloader API' });
 });
 
+app.get('/health', (req, res) => {
+    res.json({
+        status: 'healthy',
+        uptime: process.uptime(),
+        timestamp: new Date().toISOString()
+    });
+});
+
 app.post('/extract', async (req, res) => {
     try {
         const { url } = req.body;
@@ -58,7 +66,38 @@ app.post('/extract', async (req, res) => {
     }
 });
 
+// Keep-Alive Mechanism to prevent Render sleep
+const KEEP_ALIVE_INTERVAL = 14 * 60 * 1000; // 14 minutes in milliseconds
+const RENDER_URL = process.env.RENDER_EXTERNAL_URL || `http://localhost:${PORT}`;
+
+function keepAlive() {
+    const https = require('https');
+    const http = require('http');
+
+    const protocol = RENDER_URL.startsWith('https') ? https : http;
+    const healthUrl = `${RENDER_URL}/health`;
+
+    protocol.get(healthUrl, (res) => {
+        let data = '';
+        res.on('data', chunk => data += chunk);
+        res.on('end', () => {
+            console.log(`[Keep-Alive] Ping successful. Status: ${res.statusCode}, Response: ${data}`);
+        });
+    }).on('error', (err) => {
+        console.error(`[Keep-Alive] Ping failed: ${err.message}`);
+    });
+}
+
 // Start Server
 app.listen(PORT, () => {
     console.log(`Server running on port ${PORT}`);
+    console.log(`Keep-alive enabled: Pinging ${RENDER_URL} every 14 minutes`);
+
+    // Start keep-alive pings (only if deployed, not in local dev)
+    if (process.env.RENDER_EXTERNAL_URL) {
+        setInterval(keepAlive, KEEP_ALIVE_INTERVAL);
+        console.log('[Keep-Alive] Self-ping mechanism activated');
+    } else {
+        console.log('[Keep-Alive] Skipped (running locally)');
+    }
 });
