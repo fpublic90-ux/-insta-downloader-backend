@@ -128,17 +128,28 @@ app.post('/extract-yt', async (req, res) => {
             return res.status(404).json({ status: 'error', message: 'Video not found or unavailable' });
         }
 
-        // Pick best available video quality
-        const videos = apiResult.videos?.items || [];
-        const audios = apiResult.audios?.items || [];
+        // Logging the response structure for debugging (only if video not found)
+        const videos = apiResult.videos?.items || apiResult.videos || [];
+        const audios = apiResult.audios?.items || apiResult.audios || [];
+
+        if (videos.length === 0) {
+            console.warn('[YouTube] No videos found in API response. Keys:', Object.keys(apiResult));
+            console.log('[YouTube] Full Response snippet:', JSON.stringify(apiResult).substring(0, 500));
+        }
 
         // Try to find a merged video (has both audio+video)
+        // Priority: MP4 with Audio > Any MP4 > Any Video
         let bestVideo = videos.find(v => v.hasAudio && v.extension === 'mp4') ||
             videos.find(v => v.extension === 'mp4') ||
+            videos.find(v => v.hasAudio) ||
             videos[0];
 
         if (!bestVideo) {
-            return res.status(404).json({ status: 'error', message: 'No downloadable video found' });
+            return res.status(404).json({
+                status: 'error',
+                message: 'No downloadable video found',
+                debug: { hasVideos: videos.length > 0, keys: Object.keys(apiResult) }
+            });
         }
 
         res.json({
