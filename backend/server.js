@@ -3,6 +3,7 @@ const cors = require('cors');
 const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
 const morgan = require('morgan');
+const https = require('https');
 const { extractVideoInfo } = require('./utils/extractor');
 
 const app = express();
@@ -27,7 +28,7 @@ app.use('/extract', limiter);
 
 // Routes
 app.get('/', (req, res) => {
-    res.json({ status: 'running', message: 'Instagram Public Downloader API' });
+    res.json({ status: 'running', message: 'VidSaver Downloader API — Instagram, Facebook, YouTube' });
 });
 
 app.get('/health', (req, res) => {
@@ -65,6 +66,99 @@ app.post('/extract', async (req, res) => {
         });
     }
 });
+
+// YouTube Shorts Downloader via RapidAPI
+app.post('/extract-yt', async (req, res) => {
+    try {
+        const { url } = req.body;
+
+        if (!url) {
+            return res.status(400).json({ status: 'error', message: 'URL is required' });
+        }
+
+        // Extract video ID from URL
+        let videoId = null;
+        const shortsMatch = url.match(/youtube\.com\/shorts\/([\w-]+)/);
+        const watchMatch = url.match(/[?&]v=([\w-]+)/);
+        const ytbeMatch = url.match(/yt\.be\/([\w-]+)/);
+        const youtubeMatch = url.match(/youtu\.be\/([\w-]+)/);
+
+        if (shortsMatch) videoId = shortsMatch[1];
+        else if (watchMatch) videoId = watchMatch[1];
+        else if (ytbeMatch) videoId = ytbeMatch[1];
+        else if (youtubeMatch) videoId = youtubeMatch[1];
+
+        if (!videoId) {
+            return res.status(400).json({ status: 'error', message: 'Could not extract YouTube video ID from URL' });
+        }
+
+        const rapidApiKey = process.env.RAPIDAPI_KEY;
+        if (!rapidApiKey) {
+            return res.status(500).json({ status: 'error', message: 'YouTube API not configured' });
+        }
+
+        // Call RapidAPI YouTube Media Downloader
+        const apiResult = await new Promise((resolve, reject) => {
+            const options = {
+                hostname: 'youtube-media-downloader.p.rapidapi.com',
+                path: `/v2/video/details?videoId=${videoId}`,
+                method: 'GET',
+                headers: {
+                    'x-rapidapi-key': rapidApiKey,
+                    'x-rapidapi-host': 'youtube-media-downloader.p.rapidapi.com'
+                }
+            };
+
+            const apiReq = https.request(options, (apiRes) => {
+                let data = '';
+                apiRes.on('data', chunk => data += chunk);
+                apiRes.on('end', () => {
+                    try {
+                        resolve(JSON.parse(data));
+                    } catch (e) {
+                        reject(new Error('Invalid API response'));
+                    }
+                });
+            });
+            apiReq.on('error', reject);
+            apiReq.end();
+        });
+
+        if (!apiResult || apiResult.status === false) {
+            return res.status(404).json({ status: 'error', message: 'Video not found or unavailable' });
+        }
+
+        // Pick best available video quality
+        const videos = apiResult.videos?.items || [];
+        const audios = apiResult.audios?.items || [];
+
+        // Try to find a merged video (has both audio+video)
+        let bestVideo = videos.find(v => v.hasAudio && v.extension === 'mp4') ||
+            videos.find(v => v.extension === 'mp4') ||
+            videos[0];
+
+        if (!bestVideo) {
+            return res.status(404).json({ status: 'error', message: 'No downloadable video found' });
+        }
+
+        res.json({
+            status: 'success',
+            videoUrl: bestVideo.url,
+            resolution: bestVideo.quality || bestVideo.height ? `${bestVideo.height}p` : 'HD',
+            title: apiResult.title || 'YouTube Video',
+            thumbnail: apiResult.thumbnail?.url || '',
+            duration: apiResult.lengthSeconds || 0,
+        });
+
+    } catch (error) {
+        console.error('[YouTube] API Error:', error.message);
+        res.status(500).json({
+            status: 'error',
+            message: error.message || 'Failed to extract YouTube video'
+        });
+    }
+});
+
 
 // Keep-Alive Mechanism to prevent Render sleep
 const KEEP_ALIVE_INTERVAL = 14 * 60 * 1000; // 14 minutes in milliseconds
