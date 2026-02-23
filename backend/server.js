@@ -97,11 +97,12 @@ app.post('/extract-yt', async (req, res) => {
             return res.status(500).json({ status: 'error', message: 'YouTube API not configured' });
         }
 
-        // Call RapidAPI YouTube Media Downloader
+        // Call RapidAPI YouTube Media Downloader with explicit parameters
         const apiResult = await new Promise((resolve, reject) => {
             const options = {
                 hostname: 'youtube-media-downloader.p.rapidapi.com',
-                path: `/v2/video/details?videoId=${videoId}`,
+                // Added urlAccess=normal and explicit videos/audios=true
+                path: `/v2/video/details?videoId=${videoId}&urlAccess=normal&videos=true&audios=true`,
                 method: 'GET',
                 headers: {
                     'x-rapidapi-key': rapidApiKey,
@@ -114,9 +115,14 @@ app.post('/extract-yt', async (req, res) => {
                 apiRes.on('data', chunk => data += chunk);
                 apiRes.on('end', () => {
                     try {
-                        resolve(JSON.parse(data));
+                        const parsed = JSON.parse(data);
+                        // Add status code for better debugging if it's not 200
+                        if (apiRes.statusCode !== 200) {
+                            console.error(`[YouTube] API Status ${apiRes.statusCode}:`, data);
+                        }
+                        resolve(parsed);
                     } catch (e) {
-                        reject(new Error('Invalid API response'));
+                        reject(new Error('Invalid API response structure'));
                     }
                 });
             });
@@ -125,30 +131,45 @@ app.post('/extract-yt', async (req, res) => {
         });
 
         if (!apiResult || apiResult.status === false) {
-            return res.status(404).json({ status: 'error', message: 'Video not found or unavailable' });
+            console.error('[YouTube] Video not found or status false:', apiResult);
+            return res.status(404).json({ status: 'error', message: apiResult?.msg || 'Video not found or unavailable' });
         }
 
-        // Logging the response structure for debugging (only if video not found)
-        const videos = apiResult.videos?.items || apiResult.videos || [];
-        const audios = apiResult.audios?.items || apiResult.audios || [];
+        // AGGRESSIVE COLLECTION: Find videos in any possible key
+        let videos = [];
+        if (Array.isArray(apiResult.videos)) videos = apiResult.videos;
+        else if (apiResult.videos?.items && Array.isArray(apiResult.videos.items)) videos = apiResult.videos.items;
+        else if (apiResult.videos && typeof apiResult.videos === 'object') {
+            // If it's an object with quality keys like "720p": {url: ...}
+            videos = Object.values(apiResult.videos).filter(v => v && (v.url || v.link));
+        }
 
         if (videos.length === 0) {
-            console.warn('[YouTube] No videos found in API response. Keys:', Object.keys(apiResult));
-            console.log('[YouTube] Full Response snippet:', JSON.stringify(apiResult).substring(0, 500));
+            console.warn('[YouTube] No videos found in API response. Response Keys:', Object.keys(apiResult));
+            // Log a bit more for debugging
+            console.log('[YouTube] Response Structure:', JSON.stringify(apiResult).substring(0, 1000));
         }
 
-        // Try to find a merged video (has both audio+video)
-        // Priority: MP4 with Audio > Any MP4 > Any Video
+        // Try to find the best format
+        // 1. Merged MP4 with audio
+        // 2. Any MP4
+        // 3. Any video with a URL
         let bestVideo = videos.find(v => v.hasAudio && v.extension === 'mp4') ||
             videos.find(v => v.extension === 'mp4') ||
-            videos.find(v => v.hasAudio) ||
+            videos.find(v => v.url || v.link) ||
             videos[0];
 
-        if (!bestVideo) {
+        if (!bestVideo || !(bestVideo.url || bestVideo.link)) {
+            console.error('[YouTube] Final bestVideo check failed. Videos found:', videos.length);
             return res.status(404).json({
                 status: 'error',
                 message: 'No downloadable video found',
-                debug: { hasVideos: videos.length > 0, keys: Object.keys(apiResult) }
+                debug: {
+                    videoId,
+                    hasVideos: videos.length > 0,
+                    apiKeys: Object.keys(apiResult),
+                    firstVideoKeys: videos.length > 0 ? Object.keys(videos[0]) : []
+                }
             });
         }
 
